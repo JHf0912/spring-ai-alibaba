@@ -1,0 +1,97 @@
+graph TD
+    subgraph Frontend[" "]
+        direction LR
+        admin_fe["Admin Frontend<br/>可视化 Agent 开发平台"]
+        studio_fe["Studio UI<br/>嵌入式 Agent 调试界面"]
+    end
+
+    subgraph Backend[" "]
+        direction TB
+        subgraph AdminSvc["Admin Platform"]
+            direction LR
+            admin_start["admin-server-start<br/>应用启动入口"]
+            admin_core["admin-server-core<br/>核心业务逻辑"]
+            admin_openapi["admin-server-openapi<br/>OpenAPI 接口定义"]
+            admin_runtime["admin-server-runtime<br/>运行时模型与工具"]
+        end
+        subgraph CoreSvc["Core Framework"]
+            direction LR
+            agent_fw["Agent Framework<br/>多智能体编排与上下文工程"]
+            graph_core["Graph Core<br/>状态机引擎与工作流持久化"]
+            studio["Studio<br/>Agent 调试后端"]
+            sandbox["Sandbox<br/>沙箱执行环境"]
+        end
+        subgraph Starters[" "]
+            direction LR
+            st_dashscope["starter-dashscope<br/>DashScope 模型接入"]
+            st_a2a["starter-a2a-nacos<br/>跨 Agent 通信"]
+            st_config["starter-config-nacos<br/>动态配置"]
+            st_nodes["starter-builtin-nodes<br/>内置工作流节点"]
+            st_obs["starter-graph-observation<br/>可观测性"]
+        end
+    end
+
+    subgraph Middleware[" "]
+        direction LR
+        mysql["MySQL 8.0<br/>主数据库"]
+        redis["Redis 7.2<br/>缓存与会话"]
+        nacos["Nacos<br/>服务发现与配置中心"]
+        rocketmq["RocketMQ 5.3<br/>异步消息"]
+        es["Elasticsearch 9.1<br/>日志存储与检索"]
+    end
+
+    subgraph External[" "]
+        direction LR
+        dashscope["DashScope<br/>阿里云大模型服务"]
+        otlp["OpenTelemetry<br/>链路追踪与指标"]
+    end
+
+    subgraph Infra[" "]
+        direction LR
+        logging["日志<br/>ES + Kibana + LoongCollector"]
+        monitoring["监控<br/>OTel Tracing + Metrics"]
+        config["配置<br/>Nacos Config Center"]
+        cicd["CI/CD<br/>GitHub Actions"]
+    end
+
+    Frontend --> Backend
+    AdminSvc --> CoreSvc
+    CoreSvc --> Starters
+    Starters --> Middleware
+    Starters --> External
+    Backend --> Infra
+    Infra --> Middleware
+
+    admin_fe --> admin_start
+    studio_fe --> studio
+    admin_start --> admin_core
+    admin_core --> admin_openapi
+    admin_core --> admin_runtime
+    agent_fw --> graph_core
+    studio --> agent_fw
+    sandbox --> graph_core
+    st_dashscope --> dashscope
+    st_a2a --> nacos
+    st_config --> nacos
+    st_obs --> otlp
+    admin_core --> mysql
+    agent_fw --> redis
+    admin_core --> rocketmq
+    logging --> es
+    monitoring --> otlp
+
+    classDef frontend fill:#1e3a5f,stroke:#4a9eff,color:#fff,stroke-width:2px
+    classDef admin fill:#2d1b4e,stroke:#9b59b6,color:#fff,stroke-width:2px
+    classDef core fill:#1a3c34,stroke:#2ecc71,color:#fff,stroke-width:2px
+    classDef starter fill:#3c2a1a,stroke:#e67e22,color:#fff,stroke-width:2px
+    classDef middleware fill:#3c1a1a,stroke:#e74c3c,color:#fff,stroke-width:2px
+    classDef external fill:#2c2c2c,stroke:#95a5a6,color:#fff,stroke-width:2px
+    classDef infra fill:#1a2a3c,stroke:#3498db,color:#fff,stroke-width:2px
+
+    class admin_fe,studio_fe frontend
+    class admin_start,admin_core,admin_openapi,admin_runtime admin
+    class agent_fw,graph_core,studio,sandbox core
+    class st_dashscope,st_a2a,st_config,st_nodes,st_obs starter
+    class mysql,redis,nacos,rocketmq,es middleware
+    class dashscope,otlp external
+    class logging,monitoring,config,cicd infra

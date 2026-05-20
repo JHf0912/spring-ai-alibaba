@@ -1,0 +1,38 @@
+sequenceDiagram
+    participant Client as Client<br/>调用方
+    participant PC as PromptController<br/>接口层
+    participant PS as PromptServiceImpl<br/>业务层
+    participant PM as PromptMapper<br/>数据访问层
+    participant DB as MySQL<br/>数据库
+
+    rect rgb(30, 58, 95)
+        Note over PC,PS: 创建 Prompt 主流程
+        Client->>+PC: POST /api/prompt
+        PC->>+PS: create(PromptCreateRequest)
+
+        rect rgb(45, 27, 78)
+            Note over PS,DB: Step 1: 唯一性校验
+            PS->>+PM: selectByPromptKey(key)
+            PM->>+DB: SELECT FROM prompt
+            DB-->>-PM: PromptDO | null
+            PM-->>-PS: 结果
+        end
+
+        alt key 已存在
+            PS-->>PC: throw CONFLICT
+            PC-->>Client: 409
+        end
+
+        rect rgb(26, 60, 52)
+            Note over PS,DB: Step 2: 持久化
+            PS->>PS: build PromptDO
+            PS->>+PM: insert(promptDO)
+            PM->>+DB: INSERT INTO prompt
+            DB-->>-PM: OK
+            PM-->>-PS: done
+        end
+
+        PS->>PS: Prompt.fromDO()
+        PS-->>-PC: Prompt
+        PC-->>-Client: Result.success
+    end

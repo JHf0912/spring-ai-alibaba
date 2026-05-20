@@ -1,0 +1,247 @@
+erDiagram
+
+    account {
+        bigint id PK
+        varchar account_id UK
+        varchar username
+        varchar email
+        varchar password
+        varchar type
+        tinyint status
+    }
+
+    workspace {
+        bigint id PK
+        varchar workspace_id UK
+        varchar account_id FK
+        varchar name
+        tinyint status
+    }
+
+    api_key {
+        bigint id PK
+        varchar account_id FK
+        varchar api_key UK
+        tinyint status
+    }
+
+    application {
+        bigint id PK
+        varchar app_id UK
+        varchar workspace_id FK
+        varchar name
+        varchar type
+        tinyint status
+    }
+
+    application_version {
+        bigint id PK
+        varchar app_id FK
+        varchar workspace_id
+        longtext config
+        varchar version
+        tinyint status
+    }
+
+    application_component {
+        bigint id PK
+        varchar workspace_id
+        varchar app_id FK
+        varchar code
+        varchar type
+        longtext config
+    }
+
+    agent_schema {
+        bigint id PK
+        varchar agent_id UK
+        varchar workspace_id
+        varchar name
+        varchar type
+        text instruction
+        longtext yaml_schema
+        varchar status
+    }
+
+    plugin {
+        bigint id PK
+        varchar plugin_id UK
+        varchar workspace_id FK
+        varchar name
+        tinyint status
+    }
+
+    tool {
+        bigint id PK
+        varchar tool_id UK
+        varchar plugin_id FK
+        varchar workspace_id
+        varchar name
+        longtext api_schema
+    }
+
+    provider {
+        bigint id PK
+        varchar workspace_id FK
+        varchar provider
+        varchar name
+        varchar protocol
+        tinyint enable
+    }
+
+    model {
+        bigint id PK
+        varchar workspace_id
+        varchar model_id
+        varchar provider FK
+        varchar type
+        tinyint enable
+    }
+
+    knowledge_base {
+        bigint id PK
+        varchar kb_id UK
+        varchar workspace_id FK
+        varchar name
+        bigint total_docs
+    }
+
+    document {
+        bigint id PK
+        varchar doc_id UK
+        varchar kb_id FK
+        varchar workspace_id
+        varchar name
+        varchar format
+        tinyint index_status
+    }
+
+    mcp_server {
+        bigint id PK
+        varchar server_code UK
+        varchar workspace_id
+        varchar name
+        varchar type
+        tinyint status
+    }
+
+    reference {
+        bigint id PK
+        varchar main_code
+        tinyint main_type
+        varchar refer_code
+        tinyint refer_type
+        varchar workspace_id
+    }
+
+    dataset {
+        bigint id PK
+        varchar name
+        text description
+        tinyint deleted
+    }
+
+    dataset_version {
+        bigint id PK
+        bigint dataset_id FK
+        varchar version
+        varchar status
+        int data_count
+    }
+
+    dataset_item {
+        bigint id PK
+        bigint dataset_id FK
+        longtext data_content
+        tinyint deleted
+    }
+
+    evaluator {
+        bigint id PK
+        varchar name
+        text description
+        tinyint deleted
+    }
+
+    evaluator_version {
+        bigint id PK
+        bigint evaluator_id FK
+        varchar version
+        text model_config
+        varchar status
+    }
+
+    evaluator_template {
+        bigint id PK
+        varchar evaluator_template_key UK
+        longtext template
+    }
+
+    experiment {
+        bigint id PK
+        varchar name
+        bigint dataset_id FK
+        bigint dataset_version_id FK
+        varchar status
+        int progress
+    }
+
+    experiment_result {
+        bigint id PK
+        bigint experiment_id FK
+        longtext input
+        longtext actual_output
+        decimal score
+        bigint evaluator_version_id FK
+    }
+
+    prompt {
+        bigint id PK
+        varchar prompt_key UK
+        varchar prompt_desc
+        varchar latest_version
+    }
+
+    prompt_version {
+        bigint id PK
+        varchar prompt_key FK
+        varchar version
+        longtext template
+        varchar status
+    }
+
+    prompt_build_template {
+        bigint id PK
+        varchar prompt_template_key UK
+        longtext template
+    }
+
+    model_config {
+        bigint id PK
+        varchar name UK
+        varchar provider
+        varchar model_name
+        varchar base_url
+        tinyint status
+    }
+
+    account ||--o{ workspace : "owns"
+    account ||--o{ api_key : "creates"
+    workspace ||--o{ application : "contains"
+    workspace ||--o{ plugin : "contains"
+    workspace ||--o{ provider : "configures"
+    workspace ||--o{ knowledge_base : "contains"
+    workspace ||--o{ mcp_server : "registers"
+    application ||--o{ application_version : "versions"
+    application ||--o{ application_component : "composes"
+    plugin ||--o{ tool : "exposes"
+    provider ||--o{ model : "offers"
+    knowledge_base ||--o{ document : "stores"
+    dataset ||--o{ dataset_version : "versions"
+    dataset ||--o{ dataset_item : "items"
+    evaluator ||--o{ evaluator_version : "versions"
+    dataset ||--o{ experiment : "uses"
+    dataset_version ||--o{ experiment : "targets"
+    experiment ||--o{ experiment_result : "produces"
+    evaluator_version ||--o{ experiment_result : "scores"
+    prompt ||--o{ prompt_version : "versions"

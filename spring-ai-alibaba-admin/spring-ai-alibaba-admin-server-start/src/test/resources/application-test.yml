@@ -1,0 +1,35 @@
+# 测试环境配置 — 连接本地已运行的中间件
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:13306/admin?useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    username: root
+    password: root
+  data:
+    redis:
+      host: localhost
+      port: 6380
+  elasticsearch:
+    uris: http://localhost:9201
+  jpa:
+    hibernate:
+      ddl-auto: none
+
+# Nacos
+nacos:
+  server-addr: localhost:8848
+
+# RocketMQ
+rocketmq:
+  endpoints: localhost:18080
+
+# OTLP
+management:
+  otlp:
+    tracing:
+      export:
+        endpoint: http://localhost:4318/v1/traces
+
+# 关闭不必要的功能
+spring.ai:
+  dashscope:
+    api-key: dummy

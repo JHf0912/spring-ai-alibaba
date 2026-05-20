@@ -55,7 +55,7 @@
         <mysql.version>8.0.33</mysql.version>
 
         <!-- 工具库 -->
-        <lombok.version>1.18.30</lombok.version>
+        <lombok.version>1.18.34</lombok.version>
         <slf4j.version>2.0.7</slf4j.version>
         <logback.version>1.5.8</logback.version>
         <commons-lang3.version>3.11</commons-lang3.version>
@@ -428,6 +428,13 @@
                         <target>${java.version}</target>
                         <encoding>${project.build.sourceEncoding}</encoding>
                         <parameters>true</parameters>
+                        <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
+                        </annotationProcessorPaths>
                     </configuration>
                 </plugin>
             </plugins>

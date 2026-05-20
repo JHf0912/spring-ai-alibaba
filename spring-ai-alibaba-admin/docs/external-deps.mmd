@@ -1,0 +1,50 @@
+graph TD
+    subgraph JavaDeps[" "]
+        direction LR
+        springboot["Spring Boot 3.x<br/>应用框架"]
+        springai["Spring AI 1.1.2<br/>AI 应用抽象层"]
+        mybatis["MyBatis Plus 3.5.9<br/>ORM 持久化"]
+        jpa["Spring Data JPA<br/>Hibernate ORM"]
+        jackson["Jackson<br/>JSON 序列化"]
+        guava["Guava 33.x<br/>核心工具库"]
+        jgrapht["JGraphT 1.5<br/>图算法引擎"]
+        graalvm["GraalVM Polyglot 24.x<br/>JS/Python 沙箱执行"]
+        netty["Netty / Reactor<br/>异步网络框架"]
+        initializr["Spring Initializr 0.22<br/>项目脚手架生成"]
+    end
+
+    subgraph Middleware[" "]
+        direction LR
+        mysql["MySQL 8.0<br/>主数据库"]
+        pg["PostgreSQL<br/>图持久化"]
+        oracle["Oracle<br/>图持久化"]
+        mongo["MongoDB<br/>图持久化"]
+        redis["Redis 7.2 / Redisson<br/>缓存与分布式锁"]
+        es["Elasticsearch 8.x<br/>向量存储 + 日志检索"]
+        nacos["Nacos 3.x<br/>服务发现 + 动态配置"]
+        rocketmq["RocketMQ 5.x<br/>异步消息队列"]
+        oss["Alibaba Cloud OSS<br/>对象存储"]
+    end
+
+    subgraph ExternalAPI[" "]
+        direction LR
+        dashscope["DashScope<br/>Qwen 系列大模型"]
+        openai["OpenAI<br/>GPT-4o"]
+        deepseek["DeepSeek<br/>deepseek-chat"]
+        mcp["MCP SDK 0.14<br/>模型上下文协议"]
+        a2a["A2A SDK 0.2.5<br/>Agent 间通信协议"]
+        otel["OpenTelemetry<br/>链路追踪与指标"]
+        arms["Alibaba ARMS<br/>应用实时监控"]
+        docker["Docker Java 3.5<br/>容器管理 API"]
+    end
+
+    JavaDeps --> Middleware
+    JavaDeps --> ExternalAPI
+
+    classDef java fill:#1e3a5f,stroke:#4a9eff,color:#fff,stroke-width:2px
+    classDef mw fill:#3c1a1a,stroke:#e74c3c,color:#fff,stroke-width:2px
+    classDef api fill:#1a3c34,stroke:#2ecc71,color:#fff,stroke-width:2px
+
+    class springboot,springai,mybatis,jpa,jackson,guava,jgrapht,graalvm,netty,initializr java
+    class mysql,pg,oracle,mongo,redis,es,nacos,rocketmq,oss mw
+    class dashscope,openai,deepseek,mcp,a2a,otel,arms,docker api
