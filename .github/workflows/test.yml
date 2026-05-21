@@ -1,0 +1,234 @@
+# .github/workflows/test.yml — Spring AI Alibaba Admin 测试流水线
+#
+# 触发条件：push 到任何分支 + PR 到 main
+# 运行环境：JDK 17 + MySQL 8.0 + Redis 7.2 + ES 9.1 + Nacos 3.0 + RocketMQ 5.3
+# 测试内容：mvn clean test（单元测试 + Characterization 测试）
+#
+# 注意：此文件位于根目录 .github/workflows/，但构建目标是 spring-ai-alibaba-admin 子模块。
+# 所有 mvn 命令通过 working-directory 指向 admin 目录。
+
+name: Admin Test
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "spring-ai-alibaba-admin/**"
+      - ".github/workflows/test.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "spring-ai-alibaba-admin/**"
+      - ".github/workflows/test.yml"
+
+concurrency:
+  group: admin-test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: "17"
+  ADMIN_DIR: spring-ai-alibaba-admin
+
+jobs:
+  # ─────────────────────────────────────────────────────
+  # Job 1: 单元测试（不需要中间件）
+  # ─────────────────────────────────────────────────────
+  unit-test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ${{ env.ADMIN_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build and run unit tests
+        run: mvn -B clean test -Dtest='!*CharacterizationTest' -Dsurefire.failIfNoSpecifiedTests=false
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: "${{ env.ADMIN_DIR }}/**/target/surefire-reports/"
+          retention-days: 14
+
+  # ─────────────────────────────────────────────────────
+  # Job 2: 集成测试（需要中间件）
+  # ─────────────────────────────────────────────────────
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ${{ env.ADMIN_DIR }}
+
+    services:
+      mysql:
+        image: mysql:8.0.35
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: admin
+          MYSQL_USER: admin
+          MYSQL_PASSWORD: admin
+          TZ: Asia/Shanghai
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -u root -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+          --health-start-period=30s
+
+      redis:
+        image: redis:7.2.5
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:9.1.2
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          xpack.security.enrollment.enabled: "false"
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+          cluster.name: es-cluster
+          node.name: es-node-1
+          action.destructive_requires_name: "false"
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd="curl -sf http://localhost:9200/_cluster/health || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+          --health-start-period=60s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Init MySQL schema
+        run: |
+          for i in $(seq 1 30); do
+            mysql -h 127.0.0.1 -P 3306 -u root -proot -e "SELECT 1" && break
+            sleep 2
+          done
+          mysql -h 127.0.0.1 -P 3306 -u root -proot admin < docker/middleware/init/mysql/admin-schema.sql
+          mysql -h 127.0.0.1 -P 3306 -u root -proot admin < docker/middleware/init/mysql/agentscope-schema.sql
+          echo "MySQL schema initialized"
+
+      - name: Init Elasticsearch index
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:9200/_cluster/health && break
+            sleep 3
+          done
+          curl -sf -X PUT "http://localhost:9200/_ingest/pipeline/parsing_loongsuite_traces" \
+            -H "Content-Type: application/json" \
+            -d '{"processors":[{"json":{"field":"contents.attribute","target_field":"attributes"}},{"json":{"field":"contents.resource","target_field":"resources"}},{"json":{"field":"contents.links","target_field":"spanLinks"}},{"json":{"field":"contents.logs","target_field":"spanEvents"}},{"remove":{"field":["contents.attribute","contents.resource","contents.links","contents.logs"]}},{"rename":{"field":"contents","target_field":"metadata"}},{"script":{"source":"Map usage = new HashMap();long total = 0;if (ctx.attributes.containsKey(\"gen_ai.usage.input_tokens\")) {long input = Long.parseLong(ctx.attributes[\"gen_ai.usage.input_tokens\"]);usage[\"input_tokens\"] = input;total = total + input;}if (ctx.attributes.containsKey(\"gen_ai.usage.output_tokens\")) {long output = Long.parseLong(ctx.attributes[\"gen_ai.usage.output_tokens\"]);usage[\"output_tokens\"] = output;total = total + output;}usage[\"total_tokens\"] = total;ctx.usage = usage;"}}]}'
+          curl -sf -X PUT "http://localhost:9200/loongsuite_traces" \
+            -H "Content-Type: application/json" \
+            -d '{"settings":{"index.default_pipeline":"parsing_loongsuite_traces"},"mappings":{"dynamic":"false","properties":{"metadata":{"type":"object"},"attributes":{"type":"flattened"},"resources":{"type":"flattened"},"usage":{"type":"object"}}}}'
+          echo "ES index initialized"
+
+      - name: Start Nacos
+        run: |
+          docker run -d --name saa-nacos \
+            -p 8848:8848 -p 9848:9848 \
+            -e MODE=standalone \
+            -e JVM_XMS=256m \
+            -e JVM_XMX=512m \
+            -e NACOS_AUTH_TOKEN=dG9rZW5hbHNka2ZqbGFza2RqZmxhc2tkamZsYXNrZGpmb3dpZWpmbztzZGxm \
+            -e NACOS_AUTH_IDENTITY_KEY=admin \
+            -e NACOS_AUTH_IDENTITY_VALUE=admin \
+            nacos/nacos-server:v3.0.3
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8848/nacos/ && break
+            sleep 3
+          done
+          echo "Nacos started"
+
+      - name: Start RocketMQ
+        run: |
+          docker network create rmq-net 2>/dev/null || true
+          docker run -d --name saa-rmq-namesrv --network rmq-net -p 9876:9876 \
+            -e JAVA_OPT_EXT="-Xms128m -Xmx256m" apache/rocketmq:5.3.2 sh mqnamesrv
+          sleep 5
+          docker run -d --name saa-rmq-broker --network rmq-net -p 10911:10911 \
+            -e NAMESRV_ADDR=saa-rmq-namesrv:9876 -e JAVA_OPT_EXT="-Xms256m -Xmx512m" \
+            apache/rocketmq:5.3.2 sh mqbroker
+          docker run -d --name saa-rmq-proxy --network rmq-net -p 18080:18080 -p 18081:18081 \
+            -e NAMESRV_ADDR=saa-rmq-namesrv:9876 -e JAVA_OPT_EXT="-Xms128m -Xmx256m" \
+            apache/rocketmq:5.3.2 sh mqproxy
+          for i in $(seq 1 20); do
+            docker exec saa-rmq-broker sh mqadmin clusterList -n saa-rmq-namesrv:9876 2>/dev/null && break
+            sleep 5
+          done
+          docker exec saa-rmq-broker sh mqadmin updateTopic -n saa-rmq-namesrv:9876 -t topic_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
+          docker exec saa-rmq-broker sh mqadmin updateSubGroup -n saa-rmq-namesrv:9876 -g group_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
+          echo "RocketMQ started"
+
+      - name: Build admin project
+        run: mvn -B clean package -DskipTests=true
+
+      - name: Start application
+        run: |
+          java -Dserver.port=8081 \
+            -Dspring.datasource.url="jdbc:mysql://localhost:3306/admin?useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai" \
+            -Dspring.datasource.username=root \
+            -Dspring.datasource.password=root \
+            -Dspring.data.redis.host=localhost \
+            -Dspring.data.redis.port=6379 \
+            -Dspring.elasticsearch.uris=http://localhost:9200 \
+            -Dnacos.server-addr=localhost:8848 \
+            -Drocketmq.endpoints=localhost:18080 \
+            -Dmanagement.otlp.tracing.export.endpoint=http://localhost:4318/v1/traces \
+            -jar spring-ai-alibaba-admin-server-start/target/spring-ai-alibaba-admin-server-start.jar &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8081/console/v1/system/health 2>/dev/null | grep -q "ok" && break
+            sleep 3
+          done
+          echo "Application started"
+
+      - name: Run integration tests
+        env:
+          TEST_BASE_URL: http://localhost:8081
+        run: mvn -pl spring-ai-alibaba-admin-server-start -am -B test -Dtest='*CharacterizationTest' -Dsurefire.failIfNoSpecifiedTests=false
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-reports
+          path: "${{ env.ADMIN_DIR }}/**/target/surefire-reports/"
+          retention-days: 14
+
+      - name: Upload application logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-logs
+          path: /tmp/saa-admin.log
+          retention-days: 7
