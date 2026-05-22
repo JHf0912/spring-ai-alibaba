@@ -173,25 +173,64 @@ jobs:
       - name: Start RocketMQ
         run: |
           docker network create rmq-net 2>/dev/null || true
+
+          # NameServer
           docker run -d --name saa-rmq-namesrv --network rmq-net -p 9876:9876 \
             -e JAVA_OPT_EXT="-Xms128m -Xmx256m" apache/rocketmq:5.3.2 sh mqnamesrv
-          sleep 5
+          for i in $(seq 1 20); do
+            docker exec saa-rmq-namesrv sh mqadmin clusterList -n localhost:9876 2>/dev/null && break
+            sleep 3
+          done
+          echo "NameServer ready"
+
+          # Broker
           docker run -d --name saa-rmq-broker --network rmq-net -p 10911:10911 \
             -e NAMESRV_ADDR=saa-rmq-namesrv:9876 -e JAVA_OPT_EXT="-Xms256m -Xmx512m" \
             apache/rocketmq:5.3.2 sh mqbroker
+          for i in $(seq 1 20); do
+            docker exec saa-rmq-broker sh mqadmin clusterList -n saa-rmq-namesrv:9876 2>/dev/null && break
+            sleep 3
+          done
+          echo "Broker ready"
+
+          # 创建 Topic
+          docker exec saa-rmq-broker sh mqadmin updateTopic -n saa-rmq-namesrv:9876 -t topic_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
+          docker exec saa-rmq-broker sh mqadmin updateSubGroup -n saa-rmq-namesrv:9876 -g group_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
+
+          # Proxy（需要等 Broker 完全就绪后再启动）
           docker run -d --name saa-rmq-proxy --network rmq-net -p 18080:18080 -p 18081:18081 \
             -e NAMESRV_ADDR=saa-rmq-namesrv:9876 -e JAVA_OPT_EXT="-Xms128m -Xmx256m" \
             apache/rocketmq:5.3.2 sh mqproxy
-          for i in $(seq 1 20); do
-            docker exec saa-rmq-broker sh mqadmin clusterList -n saa-rmq-namesrv:9876 2>/dev/null && break
-            sleep 5
+
+          # 等待 Proxy 端口就绪（Proxy 启动较慢，给足时间）
+          echo "Waiting for RocketMQ Proxy..."
+          for i in $(seq 1 30); do
+            if nc -z localhost 18080 2>/dev/null; then
+              echo "Proxy ready on port 18080"
+              break
+            fi
+            sleep 3
+            echo "  waiting proxy... ($((i*3))s)"
           done
-          docker exec saa-rmq-broker sh mqadmin updateTopic -n saa-rmq-namesrv:9876 -t topic_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
-          docker exec saa-rmq-broker sh mqadmin updateSubGroup -n saa-rmq-namesrv:9876 -g group_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
-          echo "RocketMQ started"
+
+          # 验证 Proxy 可达
+          nc -z localhost 18080 || { echo "RocketMQ Proxy failed to start"; docker logs saa-rmq-proxy; exit 1; }
+          echo "RocketMQ fully started"
 
       - name: Build admin project
         run: mvn -B clean package -DskipTests=true
+
+      - name: Verify all middleware ready
+        run: |
+          echo "Checking middleware..."
+          mysql -h 127.0.0.1 -P 3306 -u root -proot -e "SELECT 1" || { echo "MySQL not ready"; exit 1; }
+          redis-cli -h 127.0.0.1 -p 6379 ping || { echo "Redis not ready"; exit 1; }
+          curl -sf http://localhost:9200/_cluster/health || { echo "ES not ready"; exit 1; }
+          curl -sf http://localhost:8848/nacos/ || { echo "Nacos not ready"; exit 1; }
+          nc -z localhost 9876 || { echo "RMQ NameServer not ready"; exit 1; }
+          nc -z localhost 10911 || { echo "RMQ Broker not ready"; exit 1; }
+          nc -z localhost 18080 || { echo "RMQ Proxy not ready"; exit 1; }
+          echo "All middleware ready ✓"
 
       - name: Start application
         run: |
