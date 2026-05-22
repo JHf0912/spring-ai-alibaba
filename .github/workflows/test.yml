@@ -254,21 +254,33 @@ jobs:
           nc -z localhost 18080 || { echo "RMQ Proxy not ready"; exit 1; }
           echo "  RMQ Proxy OK"
 
-          # 诊断：检查 Proxy 容器是否健康
+          # 等待 Proxy 真正能处理请求（不只是端口打开）
+          echo "Waiting for RocketMQ Proxy to be fully operational..."
+          for i in $(seq 1 30); do
+            # 用 mqadmin 通过 Proxy 创建一个临时 topic 来验证 Proxy 能工作
+            if docker exec saa-rmq-broker sh mqadmin topicList -n saa-rmq-proxy:18080 -c DefaultCluster 2>/dev/null | grep -q "topic"; then
+              echo "Proxy operational after $((i*5))s"
+              break
+            fi
+            sleep 5
+            echo "  waiting proxy... ($((i*5))s)"
+          done
+
+          # 最终诊断
           echo ""
           echo "=== RocketMQ Proxy 容器状态 ==="
           docker ps --filter name=saa-rmq-proxy --format "{{.Status}}"
           echo ""
-          echo "=== RocketMQ Proxy 最后 10 行日志 ==="
-          docker logs --tail 10 saa-rmq-proxy 2>&1
+          echo "=== RocketMQ Proxy 日志 ==="
+          docker logs --tail 15 saa-rmq-proxy 2>&1
           echo ""
 
-          # Proxy 端口已开但 gRPC 服务还在初始化，等它真正就绪
-          echo "Waiting for RocketMQ Proxy gRPC to stabilize (30s)..."
-          sleep 30
-
-          # 再次检查 Proxy 容器是否还活着
-          docker ps --filter name=saa-rmq-proxy --format "{{.Status}}" || { echo "Proxy container died!"; exit 1; }
+          # 端口检查
+          echo "NameServer (9876): $(nc -z localhost 9876 && echo OK || echo FAIL)"
+          echo "Broker (10911): $(nc -z localhost 10911 && echo OK || echo FAIL)"
+          echo "Proxy (18080): $(nc -z localhost 18080 && echo OK || echo FAIL)"
+          echo "Proxy gRPC (18081): $(nc -z localhost 18081 && echo OK || echo FAIL)"
+          echo ""
 
           echo "All middleware ready ✓"
 
@@ -280,12 +292,22 @@ jobs:
           echo "Port 8081 free: $(nc -z localhost 8081 2>/dev/null && echo 'NO - IN USE' || echo 'YES')"
           echo ""
 
-          # 检查 RocketMQ Proxy 实际连通性
+          # 最终确认所有 Docker 容器还活着
+          echo "=== Docker container status ==="
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep saa-
+          echo ""
+
+          # 检查 RocketMQ 实际连通性
           echo "=== RocketMQ connectivity ==="
           echo "NameServer (9876): $(nc -z localhost 9876 && echo OK || echo FAIL)"
           echo "Broker (10911): $(nc -z localhost 10911 && echo OK || echo FAIL)"
-          echo "Proxy (18080): $(nc -z localhost 18080 && echo OK || echo FAIL)"
+          echo "Proxy remoting (18080): $(nc -z localhost 18080 && echo OK || echo FAIL)"
           echo "Proxy gRPC (18081): $(nc -z localhost 18081 && echo OK || echo FAIL)"
+          echo ""
+
+          # 尝试通过 Proxy 创建 topic 来验证 Proxy 真正可用
+          echo "=== Testing Proxy functionality ==="
+          docker exec saa-rmq-broker sh mqadmin updateTopic -n saa-rmq-proxy:18080 -t ci-health-check -c DefaultCluster 2>&1 | tail -3
           echo ""
 
           # 环境变量（YAML 中 ${VAR} 占位符需要 env，不是 -D）
