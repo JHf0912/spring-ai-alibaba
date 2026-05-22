@@ -240,12 +240,19 @@ jobs:
         run: |
           echo "Checking middleware..."
           mysql -h 127.0.0.1 -P 3306 -u root -proot -e "SELECT 1" || { echo "MySQL not ready"; exit 1; }
-          redis-cli -h 127.0.0.1 -p 6379 ping || { echo "Redis not ready"; exit 1; }
+          echo "  MySQL OK"
+          nc -z localhost 6379 || { echo "Redis not ready"; exit 1; }
+          echo "  Redis OK"
           curl -sf http://localhost:9200/_cluster/health || { echo "ES not ready"; exit 1; }
+          echo "  ES OK"
           curl -sf http://localhost:8848/nacos/ || { echo "Nacos not ready"; exit 1; }
+          echo "  Nacos OK"
           nc -z localhost 9876 || { echo "RMQ NameServer not ready"; exit 1; }
+          echo "  RMQ NameServer OK"
           nc -z localhost 10911 || { echo "RMQ Broker not ready"; exit 1; }
+          echo "  RMQ Broker OK"
           nc -z localhost 18080 || { echo "RMQ Proxy not ready"; exit 1; }
+          echo "  RMQ Proxy OK"
           echo "All middleware ready ✓"
 
       - name: Start application
