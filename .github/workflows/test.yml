@@ -249,22 +249,49 @@ jobs:
             -jar spring-ai-alibaba-admin-server-start/target/spring-ai-alibaba-admin-server-start.jar \
             > /tmp/saa-admin.log 2>&1 &
           APP_PID=$!
+          echo $APP_PID > /tmp/saa-app.pid
           echo "App PID: $APP_PID"
 
+          # 等待首次健康检查通过
           for i in $(seq 1 60); do
-            # 进程崩了立即退出
             if ! kill -0 $APP_PID 2>/dev/null; then
-              echo "Application process died!"
+              echo "Application process died during startup!"
               tail -80 /tmp/saa-admin.log
               exit 1
             fi
-            curl -sf http://localhost:8081/console/v1/system/health 2>/dev/null | grep -q "ok" && echo "Application ready" && break
+            curl -sf http://localhost:8081/console/v1/system/health 2>/dev/null | grep -q "ok" && break
             sleep 3
             echo "  waiting... ($((i*3))s)"
           done
 
-          # 最终验证
-          curl -sf http://localhost:8081/console/v1/system/health || { echo "Application failed to start"; tail -80 /tmp/saa-admin.log; exit 1; }
+          # 稳定性验证：等 10 秒后再检查，确保 Spring Context 完全初始化
+          echo "First health check passed, verifying stability..."
+          sleep 10
+
+          if ! kill -0 $APP_PID 2>/dev/null; then
+            echo "Application crashed after initial health check!"
+            tail -80 /tmp/saa-admin.log
+            exit 1
+          fi
+
+          curl -sf http://localhost:8081/console/v1/system/health || { echo "Application not stable"; tail -80 /tmp/saa-admin.log; exit 1; }
+          echo "Application stable and ready ✓"
+
+      - name: Run integration tests
+        env:
+          TEST_BASE_URL: http://localhost:8081
+        run: |
+          # 测试前再次确认应用活着
+          APP_PID=$(cat /tmp/saa-app.pid 2>/dev/null)
+          if [ -n "$APP_PID" ] && ! kill -0 $APP_PID 2>/dev/null; then
+            echo "Application died before tests could run!"
+            tail -80 /tmp/saa-admin.log
+            exit 1
+          fi
+
+          mvn -pl spring-ai-alibaba-admin-server-start -am -B test \
+            -Dtest='*CharacterizationTest' \
+            -Dsurefire.failIfNoSpecifiedTests=false
 
       - name: Run integration tests
         env:
