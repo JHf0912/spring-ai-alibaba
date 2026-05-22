@@ -257,6 +257,12 @@ jobs:
 
       - name: Start application
         run: |
+          echo "=== Pre-flight checks ==="
+          echo "Working directory: $(pwd)"
+          echo "Jar exists: $(ls -la spring-ai-alibaba-admin-server-start/target/*.jar 2>/dev/null || echo 'NO')"
+          echo "Port 8081 free: $(nc -z localhost 8081 2>/dev/null && echo 'NO - IN USE' || echo 'YES')"
+          echo ""
+
           # 环境变量（YAML 中 ${VAR} 占位符需要 env，不是 -D）
           export SPRING_DATASOURCE_URL="jdbc:mysql://localhost:3306/admin?useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
           export SPRING_DATASOURCE_USERNAME=root
@@ -268,6 +274,7 @@ jobs:
           export ROCKETMQ_ENDPOINTS=localhost:18080
           export MANAGEMENT_OTLP_TRACING_EXPORT_ENDPOINT=http://localhost:4318/v1/traces
 
+          echo "=== Starting application ==="
           java -Dserver.port=8081 \
             -jar spring-ai-alibaba-admin-server-start/target/spring-ai-alibaba-admin-server-start.jar \
             > /tmp/saa-admin.log 2>&1 &
@@ -275,29 +282,45 @@ jobs:
           echo $APP_PID > /tmp/saa-app.pid
           echo "App PID: $APP_PID"
 
-          # 等待首次健康检查通过
-          for i in $(seq 1 60); do
-            if ! kill -0 $APP_PID 2>/dev/null; then
-              echo "Application process died during startup!"
-              tail -80 /tmp/saa-admin.log
-              exit 1
-            fi
-            curl -sf http://localhost:8081/console/v1/system/health 2>/dev/null | grep -q "ok" && break
-            sleep 3
-            echo "  waiting... ($((i*3))s)"
-          done
+          # 等 5 秒让 JVM 启动
+          sleep 5
 
-          # 稳定性验证：等 10 秒后再检查，确保 Spring Context 完全初始化
-          echo "First health check passed, verifying stability..."
-          sleep 10
-
+          # 检查进程是否还活着
           if ! kill -0 $APP_PID 2>/dev/null; then
-            echo "Application crashed after initial health check!"
-            tail -80 /tmp/saa-admin.log
+            echo "=== Application died immediately! ==="
+            echo "=== Last 100 lines of log ==="
+            tail -100 /tmp/saa-admin.log
             exit 1
           fi
 
-          curl -sf http://localhost:8081/console/v1/system/health || { echo "Application not stable"; tail -80 /tmp/saa-admin.log; exit 1; }
+          echo "Process alive, waiting for health check..."
+
+          # 等待首次健康检查通过
+          for i in $(seq 1 60); do
+            if ! kill -0 $APP_PID 2>/dev/null; then
+              echo "=== Application process died during startup! ==="
+              echo "=== Last 100 lines of log ==="
+              tail -100 /tmp/saa-admin.log
+              exit 1
+            fi
+            if curl -sf http://localhost:8081/console/v1/system/health 2>/dev/null | grep -q "ok"; then
+              echo "Health check passed at $((i*3))s"
+              break
+            fi
+            sleep 3
+          done
+
+          # 稳定性验证
+          echo "Verifying stability (10s wait)..."
+          sleep 10
+
+          if ! kill -0 $APP_PID 2>/dev/null; then
+            echo "=== Application crashed after health check! ==="
+            tail -100 /tmp/saa-admin.log
+            exit 1
+          fi
+
+          curl -sf http://localhost:8081/console/v1/system/health || { echo "Application not stable"; tail -100 /tmp/saa-admin.log; exit 1; }
           echo "Application stable and ready ✓"
 
       - name: Run integration tests
