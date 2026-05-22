@@ -209,16 +209,23 @@ jobs:
           java -Dserver.port=8081 \
             -jar spring-ai-alibaba-admin-server-start/target/spring-ai-alibaba-admin-server-start.jar \
             > /tmp/saa-admin.log 2>&1 &
-          echo "App PID: $!"
+          APP_PID=$!
+          echo "App PID: $APP_PID"
 
           for i in $(seq 1 60); do
+            # 进程崩了立即退出
+            if ! kill -0 $APP_PID 2>/dev/null; then
+              echo "Application process died!"
+              tail -80 /tmp/saa-admin.log
+              exit 1
+            fi
             curl -sf http://localhost:8081/console/v1/system/health 2>/dev/null | grep -q "ok" && echo "Application ready" && break
             sleep 3
             echo "  waiting... ($((i*3))s)"
           done
 
-          # 验证应用确实启动了
-          curl -sf http://localhost:8081/console/v1/system/health || { echo "Application failed to start"; tail -50 /tmp/saa-admin.log; exit 1; }
+          # 最终验证
+          curl -sf http://localhost:8081/console/v1/system/health || { echo "Application failed to start"; tail -80 /tmp/saa-admin.log; exit 1; }
 
       - name: Run integration tests
         env:
