@@ -253,6 +253,11 @@ jobs:
           echo "  RMQ Broker OK"
           nc -z localhost 18080 || { echo "RMQ Proxy not ready"; exit 1; }
           echo "  RMQ Proxy OK"
+
+          # Proxy 端口已开但 gRPC 服务还在初始化，等它真正就绪
+          echo "Waiting for RocketMQ Proxy gRPC to stabilize..."
+          sleep 20
+
           echo "All middleware ready ✓"
 
       - name: Start application
