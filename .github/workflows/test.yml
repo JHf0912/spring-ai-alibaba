@@ -195,22 +195,30 @@ jobs:
 
       - name: Start application
         run: |
+          # 环境变量（YAML 中 ${VAR} 占位符需要 env，不是 -D）
+          export SPRING_DATASOURCE_URL="jdbc:mysql://localhost:3306/admin?useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
+          export SPRING_DATASOURCE_USERNAME=root
+          export SPRING_DATASOURCE_PASSWORD=root
+          export SPRING_REDIS_HOST=localhost
+          export SPRING_REDIS_PORT=6379
+          export SPRING_ELASTICSEARCH_URIS=http://localhost:9200
+          export NACOS_SERVER_ADDR=localhost:8848
+          export ROCKETMQ_ENDPOINTS=localhost:18080
+          export MANAGEMENT_OTLP_TRACING_EXPORT_ENDPOINT=http://localhost:4318/v1/traces
+
           java -Dserver.port=8081 \
-            -Dspring.datasource.url="jdbc:mysql://localhost:3306/admin?useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai" \
-            -Dspring.datasource.username=root \
-            -Dspring.datasource.password=root \
-            -Dspring.data.redis.host=localhost \
-            -Dspring.data.redis.port=6379 \
-            -Dspring.elasticsearch.uris=http://localhost:9200 \
-            -Dnacos.server-addr=localhost:8848 \
-            -Drocketmq.endpoints=localhost:18080 \
-            -Dmanagement.otlp.tracing.export.endpoint=http://localhost:4318/v1/traces \
-            -jar spring-ai-alibaba-admin-server-start/target/spring-ai-alibaba-admin-server-start.jar &
+            -jar spring-ai-alibaba-admin-server-start/target/spring-ai-alibaba-admin-server-start.jar \
+            > /tmp/saa-admin.log 2>&1 &
+          echo "App PID: $!"
+
           for i in $(seq 1 60); do
-            curl -sf http://localhost:8081/console/v1/system/health 2>/dev/null | grep -q "ok" && break
+            curl -sf http://localhost:8081/console/v1/system/health 2>/dev/null | grep -q "ok" && echo "Application ready" && break
             sleep 3
+            echo "  waiting... ($((i*3))s)"
           done
-          echo "Application started"
+
+          # 验证应用确实启动了
+          curl -sf http://localhost:8081/console/v1/system/health || { echo "Application failed to start"; tail -50 /tmp/saa-admin.log; exit 1; }
 
       - name: Run integration tests
         env:
