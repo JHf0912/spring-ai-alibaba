@@ -218,7 +218,23 @@ jobs:
           echo "RocketMQ fully started"
 
       - name: Build admin project
-        run: mvn -B clean package -DskipTests=true
+        run: |
+          echo "Working directory: $(pwd)"
+          echo "Java version:"
+          java -version
+          echo "Maven version:"
+          mvn -version
+          echo ""
+          echo "Starting build..."
+          mvn -B clean package -DskipTests=true -e 2>&1 | tail -50
+          BUILD_EXIT=$?
+          echo ""
+          echo "Build exit code: $BUILD_EXIT"
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "Build failed! Checking for jar..."
+            ls -la spring-ai-alibaba-admin-server-start/target/*.jar 2>/dev/null || echo "No jar found"
+          fi
+          exit $BUILD_EXIT
 
       - name: Verify all middleware ready
         run: |
