@@ -202,10 +202,11 @@ jobs:
           docker exec saa-rmq-broker sh mqadmin updateSubGroup -n saa-rmq-namesrv:9876 \
             -g group_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
 
-          # Proxy（等 Broker 完全就绪后再启动）
+          # Proxy（等 Broker 完全就绪后再启动，挂载配置文件禁用 TLS）
           docker run -d --name saa-rmq-proxy --network rmq-net -p 18080:18080 -p 18081:18081 \
             -e NAMESRV_ADDR=saa-rmq-namesrv:9876 -e JAVA_OPT_EXT="-Xms128m -Xmx256m" \
-            apache/rocketmq:5.3.2 sh mqproxy
+            -v $(pwd)/docker/middleware/conf/rocketmq:/home/rocketmq/conf:ro \
+            apache/rocketmq:5.3.2 sh mqproxy -pc /home/rocketmq/conf/rmq-proxy.json
 
           # 等 Proxy TCP 端口打开
           echo "Waiting for RocketMQ Proxy TCP..."
