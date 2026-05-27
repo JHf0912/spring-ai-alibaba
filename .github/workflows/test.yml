@@ -215,15 +215,11 @@ jobs:
           done
           nc -z localhost 18080 || { echo "Proxy TCP port not open"; docker logs saa-rmq-proxy; exit 1; }
 
-          # 等 Proxy gRPC 服务真正就绪（TCP 端口打开 ≠ gRPC 可用，需要额外 10-30s）
-          echo "Waiting for Proxy gRPC to be operational..."
-          for i in $(seq 1 30); do
-            if docker exec saa-rmq-broker sh mqadmin topicList -n saa-rmq-proxy:18080 2>/dev/null | grep -q "topic"; then
-              echo "Proxy operational after $((i*5))s"
-              break
-            fi
-            sleep 5
-          done
+          # TCP 端口打开后，gRPC 服务还需要额外初始化时间（10-30s）
+          # 注意：不能用 mqadmin topicList 通过 Proxy 检测，因为 gRPC 未就绪时命令会挂起
+          # 直接等待固定时间，应用自身有重试机制
+          echo "Waiting 30s for Proxy gRPC initialization..."
+          sleep 30
           echo "RocketMQ fully started"
 
       # ── 构建 ──
