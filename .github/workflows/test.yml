@@ -1,11 +1,11 @@
-# .github/workflows/test.yml — Spring AI Alibaba Admin 测试流水线
+# .github/workflows/test.yml — Spring AI Alibaba Admin CI
 #
-# 触发条件：push 到任何分支 + PR 到 main
-# 运行环境：JDK 17 + MySQL 8.0 + Redis 7.2 + ES 9.1 + Nacos 3.0 + RocketMQ 5.3
-# 测试内容：mvn clean test（单元测试 + Characterization 测试）
+# 两个 Job：
+#   1. unit-test         — 不需要中间件，排除 *CharacterizationTest
+#   2. integration-test  — 需要 MySQL + Redis + ES + Nacos + RocketMQ，只跑 *CharacterizationTest
 #
-# 注意：此文件位于根目录 .github/workflows/，但构建目标是 spring-ai-alibaba-admin 子模块。
-# 所有 mvn 命令通过 working-directory 指向 admin 目录。
+# 中间件配置参考 spring-ai-alibaba-admin/docker-compose.dev.yml
+# 踩坑记录见 spring-ai-alibaba-admin/docs/snags/snags.md
 
 name: Admin Test
 
@@ -30,9 +30,9 @@ env:
   ADMIN_DIR: spring-ai-alibaba-admin
 
 jobs:
-  # ─────────────────────────────────────────────────────
+  # ═══════════════════════════════════════════════════════
   # Job 1: 单元测试（不需要中间件）
-  # ─────────────────────────────────────────────────────
+  # ═══════════════════════════════════════════════════════
   unit-test:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -53,7 +53,7 @@ jobs:
       - name: Build and run unit tests
         run: mvn -B clean test -Dtest='!*CharacterizationTest' -Dsurefire.failIfNoSpecifiedTests=false
 
-      - name: Upload test reports
+      - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -61,9 +61,9 @@ jobs:
           path: "${{ env.ADMIN_DIR }}/**/target/surefire-reports/"
           retention-days: 14
 
-  # ─────────────────────────────────────────────────────
-  # Job 2: 集成测试（需要中间件）
-  # ─────────────────────────────────────────────────────
+  # ═══════════════════════════════════════════════════════
+  # Job 2: 集成测试（需要全部中间件 + 应用启动）
+  # ═══════════════════════════════════════════════════════
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -72,6 +72,7 @@ jobs:
       run:
         working-directory: ${{ env.ADMIN_DIR }}
 
+    # ── GitHub Actions 原生 Service 容器（MySQL / Redis / ES）──
     services:
       mysql:
         image: mysql:8.0.35
@@ -129,15 +130,17 @@ jobs:
           distribution: temurin
           cache: maven
 
+      # ── 中间件初始化 ──
+
       - name: Init MySQL schema
         run: |
           for i in $(seq 1 30); do
-            mysql -h 127.0.0.1 -P 3306 -u root -proot -e "SELECT 1" && break
+            mysql -h 127.0.0.1 -P 3306 -u root -proot -e "SELECT 1" 2>/dev/null && break
             sleep 2
           done
           mysql -h 127.0.0.1 -P 3306 -u root -proot admin < docker/middleware/init/mysql/admin-schema.sql
           mysql -h 127.0.0.1 -P 3306 -u root -proot admin < docker/middleware/init/mysql/agentscope-schema.sql
-          echo "MySQL schema initialized"
+          echo "MySQL: $(mysql -h 127.0.0.1 -P 3306 -u root -proot admin -e 'SHOW TABLES' 2>/dev/null | wc -l) tables"
 
       - name: Init Elasticsearch index
         run: |
@@ -153,7 +156,7 @@ jobs:
             -d '{"settings":{"index.default_pipeline":"parsing_loongsuite_traces"},"mappings":{"dynamic":"false","properties":{"metadata":{"type":"object"},"attributes":{"type":"flattened"},"resources":{"type":"flattened"},"usage":{"type":"object"}}}}'
           echo "ES index initialized"
 
-      - name: Start Nacos
+      - name: Start Nacos 3.0
         run: |
           docker run -d --name saa-nacos \
             -p 8848:8848 -p 9848:9848 \
@@ -170,7 +173,7 @@ jobs:
           done
           echo "Nacos started"
 
-      - name: Start RocketMQ
+      - name: Start RocketMQ 5.3
         run: |
           docker network create rmq-net 2>/dev/null || true
 
@@ -193,124 +196,69 @@ jobs:
           done
           echo "Broker ready"
 
-          # 创建 Topic
-          docker exec saa-rmq-broker sh mqadmin updateTopic -n saa-rmq-namesrv:9876 -t topic_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
-          docker exec saa-rmq-broker sh mqadmin updateSubGroup -n saa-rmq-namesrv:9876 -g group_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
+          # 创建应用需要的 Topic 和 ConsumerGroup
+          docker exec saa-rmq-broker sh mqadmin updateTopic -n saa-rmq-namesrv:9876 \
+            -t topic_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
+          docker exec saa-rmq-broker sh mqadmin updateSubGroup -n saa-rmq-namesrv:9876 \
+            -g group_saa_studio_document_index -c DefaultCluster 2>/dev/null || true
 
-          # Proxy（需要等 Broker 完全就绪后再启动）
+          # Proxy（等 Broker 完全就绪后再启动）
           docker run -d --name saa-rmq-proxy --network rmq-net -p 18080:18080 -p 18081:18081 \
             -e NAMESRV_ADDR=saa-rmq-namesrv:9876 -e JAVA_OPT_EXT="-Xms128m -Xmx256m" \
             apache/rocketmq:5.3.2 sh mqproxy
 
-          # 等待 Proxy 端口就绪（Proxy 启动较慢，给足时间）
-          echo "Waiting for RocketMQ Proxy..."
+          # 等 Proxy TCP 端口打开
+          echo "Waiting for RocketMQ Proxy TCP..."
           for i in $(seq 1 30); do
-            if nc -z localhost 18080 2>/dev/null; then
-              echo "Proxy ready on port 18080"
-              break
-            fi
+            nc -z localhost 18080 2>/dev/null && break
             sleep 3
-            echo "  waiting proxy... ($((i*3))s)"
           done
+          nc -z localhost 18080 || { echo "Proxy TCP port not open"; docker logs saa-rmq-proxy; exit 1; }
 
-          # 验证 Proxy 可达
-          nc -z localhost 18080 || { echo "RocketMQ Proxy failed to start"; docker logs saa-rmq-proxy; exit 1; }
-          echo "RocketMQ fully started"
-
-      - name: Build admin project
-        run: |
-          echo "Working directory: $(pwd)"
-          echo "Java version:"
-          java -version
-          echo "Maven version:"
-          mvn -version
-          echo ""
-          echo "Starting build..."
-          mvn -B clean package -DskipTests=true -e 2>&1 | tail -50
-          BUILD_EXIT=$?
-          echo ""
-          echo "Build exit code: $BUILD_EXIT"
-          if [ $BUILD_EXIT -ne 0 ]; then
-            echo "Build failed! Checking for jar..."
-            ls -la spring-ai-alibaba-admin-server-start/target/*.jar 2>/dev/null || echo "No jar found"
-          fi
-          exit $BUILD_EXIT
-
-      - name: Verify all middleware ready
-        run: |
-          echo "Checking middleware..."
-          mysql -h 127.0.0.1 -P 3306 -u root -proot -e "SELECT 1" || { echo "MySQL not ready"; exit 1; }
-          echo "  MySQL OK"
-          nc -z localhost 6379 || { echo "Redis not ready"; exit 1; }
-          echo "  Redis OK"
-          curl -sf http://localhost:9200/_cluster/health || { echo "ES not ready"; exit 1; }
-          echo "  ES OK"
-          curl -sf http://localhost:8848/nacos/ || { echo "Nacos not ready"; exit 1; }
-          echo "  Nacos OK"
-          nc -z localhost 9876 || { echo "RMQ NameServer not ready"; exit 1; }
-          echo "  RMQ NameServer OK"
-          nc -z localhost 10911 || { echo "RMQ Broker not ready"; exit 1; }
-          echo "  RMQ Broker OK"
-          nc -z localhost 18080 || { echo "RMQ Proxy not ready"; exit 1; }
-          echo "  RMQ Proxy OK"
-
-          # 等待 Proxy 真正能处理请求（不只是端口打开）
-          echo "Waiting for RocketMQ Proxy to be fully operational..."
+          # 等 Proxy gRPC 服务真正就绪（TCP 端口打开 ≠ gRPC 可用，需要额外 10-30s）
+          echo "Waiting for Proxy gRPC to be operational..."
           for i in $(seq 1 30); do
-            # 用 mqadmin 通过 Proxy 创建一个临时 topic 来验证 Proxy 能工作
-            if docker exec saa-rmq-broker sh mqadmin topicList -n saa-rmq-proxy:18080 -c DefaultCluster 2>/dev/null | grep -q "topic"; then
+            if docker exec saa-rmq-broker sh mqadmin topicList -n saa-rmq-proxy:18080 2>/dev/null | grep -q "topic"; then
               echo "Proxy operational after $((i*5))s"
               break
             fi
             sleep 5
-            echo "  waiting proxy... ($((i*5))s)"
           done
+          echo "RocketMQ fully started"
 
-          # 最终诊断
-          echo ""
-          echo "=== RocketMQ Proxy 容器状态 ==="
-          docker ps --filter name=saa-rmq-proxy --format "{{.Status}}"
-          echo ""
-          echo "=== RocketMQ Proxy 日志 ==="
-          docker logs --tail 15 saa-rmq-proxy 2>&1
-          echo ""
+      # ── 构建 ──
 
-          # 端口检查
-          echo "NameServer (9876): $(nc -z localhost 9876 && echo OK || echo FAIL)"
-          echo "Broker (10911): $(nc -z localhost 10911 && echo OK || echo FAIL)"
-          echo "Proxy (18080): $(nc -z localhost 18080 && echo OK || echo FAIL)"
-          echo "Proxy gRPC (18081): $(nc -z localhost 18081 && echo OK || echo FAIL)"
-          echo ""
+      - name: Build admin project
+        run: mvn -B clean package -DskipTests=true
 
-          echo "All middleware ready ✓"
+      # ── 中间件就绪验证 ──
+
+      - name: Verify middleware readiness
+        run: |
+          echo "=== Middleware Check ==="
+          mysql -h 127.0.0.1 -P 3306 -u root -proot -e "SELECT 1" || { echo "MySQL FAIL"; exit 1; }
+          echo "  MySQL       OK"
+          nc -z localhost 6379 || { echo "Redis FAIL"; exit 1; }
+          echo "  Redis       OK"
+          curl -sf http://localhost:9200/_cluster/health || { echo "ES FAIL"; exit 1; }
+          echo "  ES          OK"
+          curl -sf http://localhost:8848/nacos/ || { echo "Nacos FAIL"; exit 1; }
+          echo "  Nacos       OK"
+          nc -z localhost 9876 || { echo "RMQ NameSrv FAIL"; exit 1; }
+          echo "  RMQ NameSrv OK"
+          nc -z localhost 10911 || { echo "RMQ Broker FAIL"; exit 1; }
+          echo "  RMQ Broker  OK"
+          nc -z localhost 18080 || { echo "RMQ Proxy FAIL"; exit 1; }
+          echo "  RMQ Proxy   OK"
+          echo ""
+          echo "=== Docker Container Status ==="
+          docker ps --format "table {{.Names}}\t{{.Status}}" | grep saa-
+
+      # ── 启动应用 ──
 
       - name: Start application
         run: |
-          echo "=== Pre-flight checks ==="
-          echo "Working directory: $(pwd)"
-          echo "Jar exists: $(ls -la spring-ai-alibaba-admin-server-start/target/*.jar 2>/dev/null || echo 'NO')"
-          echo "Port 8081 free: $(nc -z localhost 8081 2>/dev/null && echo 'NO - IN USE' || echo 'YES')"
-          echo ""
-
-          # 最终确认所有 Docker 容器还活着
-          echo "=== Docker container status ==="
-          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep saa-
-          echo ""
-
-          # 检查 RocketMQ 实际连通性
-          echo "=== RocketMQ connectivity ==="
-          echo "NameServer (9876): $(nc -z localhost 9876 && echo OK || echo FAIL)"
-          echo "Broker (10911): $(nc -z localhost 10911 && echo OK || echo FAIL)"
-          echo "Proxy remoting (18080): $(nc -z localhost 18080 && echo OK || echo FAIL)"
-          echo "Proxy gRPC (18081): $(nc -z localhost 18081 && echo OK || echo FAIL)"
-          echo ""
-
-          # 尝试通过 Proxy 创建 topic 来验证 Proxy 真正可用
-          echo "=== Testing Proxy functionality ==="
-          docker exec saa-rmq-broker sh mqadmin updateTopic -n saa-rmq-proxy:18080 -t ci-health-check -c DefaultCluster 2>&1 | tail -3
-          echo ""
-
-          # 环境变量（YAML 中 ${VAR} 占位符需要 env，不是 -D）
+          # 环境变量（YAML ${VAR} 占位符需要 export，不是 -D）
           export SPRING_DATASOURCE_URL="jdbc:mysql://localhost:3306/admin?useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
           export SPRING_DATASOURCE_USERNAME=root
           export SPRING_DATASOURCE_PASSWORD=root
@@ -321,7 +269,6 @@ jobs:
           export ROCKETMQ_ENDPOINTS=localhost:18080
           export MANAGEMENT_OTLP_TRACING_EXPORT_ENDPOINT=http://localhost:4318/v1/traces
 
-          echo "=== Starting application ==="
           java -Dserver.port=8081 \
             -jar spring-ai-alibaba-admin-server-start/target/spring-ai-alibaba-admin-server-start.jar \
             > /tmp/saa-admin.log 2>&1 &
@@ -329,24 +276,10 @@ jobs:
           echo $APP_PID > /tmp/saa-app.pid
           echo "App PID: $APP_PID"
 
-          # 等 5 秒让 JVM 启动
-          sleep 5
-
-          # 检查进程是否还活着
-          if ! kill -0 $APP_PID 2>/dev/null; then
-            echo "=== Application died immediately! ==="
-            echo "=== Last 100 lines of log ==="
-            tail -100 /tmp/saa-admin.log
-            exit 1
-          fi
-
-          echo "Process alive, waiting for health check..."
-
-          # 等待首次健康检查通过
+          # 等待健康检查通过（同时监控进程存活）
           for i in $(seq 1 60); do
             if ! kill -0 $APP_PID 2>/dev/null; then
-              echo "=== Application process died during startup! ==="
-              echo "=== Last 100 lines of log ==="
+              echo "=== Application died during startup! ==="
               tail -100 /tmp/saa-admin.log
               exit 1
             fi
@@ -357,27 +290,26 @@ jobs:
             sleep 3
           done
 
-          # 稳定性验证
-          echo "Verifying stability (10s wait)..."
+          # 稳定性验证（确保不会启动后崩溃）
           sleep 10
-
           if ! kill -0 $APP_PID 2>/dev/null; then
             echo "=== Application crashed after health check! ==="
             tail -100 /tmp/saa-admin.log
             exit 1
           fi
+          curl -sf http://localhost:8081/console/v1/system/health || { echo "App not stable"; tail -100 /tmp/saa-admin.log; exit 1; }
+          echo "Application stable and ready"
 
-          curl -sf http://localhost:8081/console/v1/system/health || { echo "Application not stable"; tail -100 /tmp/saa-admin.log; exit 1; }
-          echo "Application stable and ready ✓"
+      # ── 运行集成测试 ──
 
-      - name: Run integration tests
+      - name: Run characterization tests
         env:
           TEST_BASE_URL: http://localhost:8081
         run: |
-          # 测试前再次确认应用活着
+          # 测试前确认应用活着
           APP_PID=$(cat /tmp/saa-app.pid 2>/dev/null)
           if [ -n "$APP_PID" ] && ! kill -0 $APP_PID 2>/dev/null; then
-            echo "Application died before tests could run!"
+            echo "Application died before tests!"
             tail -80 /tmp/saa-admin.log
             exit 1
           fi
@@ -386,7 +318,9 @@ jobs:
             -Dtest='*CharacterizationTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
 
-      - name: Upload test reports
+      # ── 产物上传 ──
+
+      - name: Upload integration test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
