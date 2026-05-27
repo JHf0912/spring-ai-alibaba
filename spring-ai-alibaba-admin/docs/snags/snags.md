@@ -528,6 +528,17 @@ for i in $(seq 1 30); do
 done
 ```
 
+**⚠️ 重要警告**: `mqadmin topicList` 通过 Proxy 检测时，如果 gRPC 未就绪，命令会**挂起**（不是返回错误）。这会导致 CI 循环永远卡住。
+
+```bash
+# ❌ 错误：gRPC 未就绪时此命令会挂起
+docker exec broker sh mqadmin topicList -n proxy:18080
+
+# ✅ 正确：用固定等待 + nc 检测 TCP 端口
+nc -z localhost 18080 && echo "TCP ready"
+sleep 30  # 等 gRPC 初始化
+```
+
 **备选方案**: 如果 Proxy 始终不稳定，可以绕过 Proxy，让应用直连 Broker：
 
 ```bash
